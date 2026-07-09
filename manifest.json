@@ -6,7 +6,7 @@
       "id": "dizipal",
       "name": "Dizipal",
       "description": "Türkçe dublaj ve altyazılı film ve diziler. Tüm dil seçeneklerini destekler.",
-      "version": "2.1.0",
+      "version": "2.1.5",
       "author": "DarthVader",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/dizipal.js",
