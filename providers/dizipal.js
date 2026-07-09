@@ -1,7 +1,7 @@
 /**
- * Dizipal Provider for Nuvio (Production Edition - Hotfix 2)
- * TMDB İngilizce bölüm adı uyumsuzluğu ve link yakalama hatası giderildi.
- * Versiyon: 2.1.5
+ * Dizipal Provider for Nuvio (Production Edition - Final Sürüm)
+ * Arama motoru esnekliği ve Akıllı Doğrudan URL Tahmin Mekanizması eklendi.
+ * Versiyon: 2.2.0
  */
 
 "use strict";
@@ -93,6 +93,15 @@ function postJson(url, data, referer) {
   });
 }
 
+function cleanSlug(text) {
+  if (!text) return "";
+  return text.toLowerCase()
+    .trim()
+    .replace(/[ğüşıöç]/g, function(c) { return {ğ:'g',ü:'u',ş:'s',ı:'i',ö:'o',ç:'c'}[c] || c; })
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 function extractSlug(html, mediaType) {
   var prefix = mediaType === "movie" ? "/film/" : "/dizi/";
   var re = new RegExp('href=["\']' + prefix + '([^"\'/]+)["\']');
@@ -100,7 +109,6 @@ function extractSlug(html, mediaType) {
   return m ? m[1] : null;
 }
 
-// Görseldeki hatayı çözen akıllı bölüm yakalayıcı regex seti
 function extractEpisodeUrl(html, domain, season, episode) {
   var s = parseInt(season, 10);
   var e = parseInt(episode, 10);
@@ -121,7 +129,6 @@ function extractEpisodeUrl(html, domain, season, episode) {
     }
   }
   
-  // Son çare: Tüm linkleri tara ve sayısal eşleşme ara
   var hrefRegex = /href=["']([^"']+)["']/g;
   var match;
   while ((match = hrefRegex.exec(html)) !== null) {
@@ -153,52 +160,82 @@ function getTmdbInfo(tmdbId, mediaType) {
     .then(function(r) { return r.json(); })
     .then(function(d) {
       return {
-        title:     (d.name || d.title || "").trim(),
+        title:     (d.name || "").trim(),
         origTitle: (d.original_name || d.original_title || "").trim()
       };
     }).catch(function() { return { title: "", origTitle: "" }; });
 }
 
+// ─── ANA MOTOR YÜRÜTÜCÜSÜ ─────────────────────────────────────────────────────
 function getStreams(tmdbId, mediaType, season, episode) {
-  log("Süreç başladı. ID: " + tmdbId + " Sezon: " + season + " Bölüm: " + episode);
+  log("Arama başlatıldı. ID: " + tmdbId);
 
   return Promise.all([getTmdbInfo(tmdbId, mediaType), getActiveDomain()])
     .then(function(initData) {
       var info = initData[0];
       var domain = initData[1];
       
-      // Sitede aratılacak adı belirle (Örn: House of the Dragon)
-      var searchQuery = info.title || info.origTitle;
-      if (!searchQuery) throw new Error("Başlık bilgisi alınamadı.");
+      var primarySearch = info.title || info.origTitle;
+      var backupSearch = info.origTitle || info.title;
+      
+      log("Birincil Arama Terimi: " + primarySearch);
+      var searchUrl = domain + "/ara?q=" + encodeURIComponent(primarySearch);
 
-      log("Aranan İçerik: " + searchQuery);
-      var searchUrl = domain + "/ara?q=" + encodeURIComponent(searchQuery);
-
-      return getHtml(searchUrl, domain).then(function(searchHtml) {
-        var slug = extractSlug(searchHtml, mediaType);
-        if (!slug) {
-          slug = searchQuery.toLowerCase()
-            .replace(/[ğüşıöç]/g, function(c) { return {ğ:'g',ü:'u',ş:'s',ı:'i',ö:'o',ç:'c'}[c] || c; })
-            .replace(/[^a-z0-9]+/g, '-')
-            .replace(/^-+|-+$/g, '');
-        }
-
-        var contentUrl = mediaType === "movie" ? domain + "/film/" + slug : domain + "/dizi/" + slug;
-        log("Dizi Ana Sayfası: " + contentUrl);
-
-        return getHtml(contentUrl, domain).then(function(contentHtml) {
-          if (mediaType === "tv") {
-            // Sezon ve bölüm linkini akıllıca yakala
-            var epUrl = extractEpisodeUrl(contentHtml, domain, season, episode);
-            if (!epUrl) throw new Error("İlgili Sezon/Bölüm bağlantısı dizi sayfasında bulunamadı.");
-            log("Bölüm Sayfası Bağlantısı: " + epUrl);
-            return getHtml(epUrl, contentUrl).then(function(epHtml) {
-              return { html: epHtml, contentUrl: epUrl, domain: domain };
+      return getHtml(searchUrl, domain)
+        .then(function(searchHtml) {
+          var slug = extractSlug(searchHtml, mediaType);
+          
+          // Eğer ilk aramada bulunamazsa alternatif isimle ara
+          if (!slug && backupSearch !== primarySearch) {
+            log("İlk arama başarısız. Alternatif ad deneniyor: " + backupSearch);
+            return getHtml(domain + "/ara?q=" + encodeURIComponent(backupSearch), domain).then(function(backupHtml) {
+              return { slug: extractSlug(backupHtml, mediaType), domain: domain, info: info };
             });
           }
-          return { html: contentHtml, contentUrl: contentUrl, domain: domain };
+          return { slug: slug, domain: domain, info: info };
+        })
+        .then(function(searchResult) {
+          var slug = searchResult.slug;
+          var domain = searchResult.domain;
+          
+          // Sitenin arama motoru tamamen patlaksa, doğrudan URL tahmini yap (Bypass Modu)
+          if (!slug) {
+            var guessedSlug = cleanSlug(searchResult.info.title) || cleanSlug(searchResult.info.origTitle);
+            log("Arama motorundan sonuç alınamadı. Tahmini URL deneniyor: " + guessedSlug);
+            slug = guessedSlug;
+          }
+
+          var contentUrl = mediaType === "movie" ? domain + "/film/" + slug : domain + "/dizi/" + slug;
+          log("Hedef İçerik Bağlantısı: " + contentUrl);
+
+          return getHtml(contentUrl, domain).then(function(contentHtml) {
+            if (mediaType === "tv") {
+              var epUrl = extractEpisodeUrl(contentHtml, domain, season, episode);
+              if (!epUrl) {
+                // Eğer doğrudan tahminde de bölüm yoksa yedek alternatif slug denemesi (örn orijinal isimle slug)
+                var backupGuessedSlug = cleanSlug(searchResult.info.origTitle);
+                if (backupGuessedSlug && backupGuessedSlug !== slug) {
+                  var backupContentUrl = domain + "/dizi/" + backupGuessedSlug;
+                  log("Yedek Tahmini URL deneniyor: " + backupContentUrl);
+                  return getHtml(backupContentUrl, domain).then(function(bHtml) {
+                    var bEpUrl = extractEpisodeUrl(bHtml, domain, season, episode);
+                    if (!bEpUrl) throw new Error("Bölüm hiçbir varyasyonda bulunamadı.");
+                    return getHtml(bEpUrl, backupContentUrl).then(function(epHtml) {
+                      return { html: epHtml, contentUrl: bEpUrl, domain: domain };
+                    });
+                  });
+                }
+                throw new Error("Sezon/Bölüm bağlantısı eşleştirilemedi.");
+              }
+              
+              log("Bölüm Sayfası Çözülüyor: " + epUrl);
+              return getHtml(epUrl, contentUrl).then(function(epHtml) {
+                return { html: epHtml, contentUrl: epUrl, domain: domain };
+              });
+            }
+            return { html: contentHtml, contentUrl: contentUrl, domain: domain };
+          });
         });
-      });
     })
     .then(function(result) {
       var html = result.html;
@@ -207,23 +244,21 @@ function getStreams(tmdbId, mediaType, season, episode) {
 
       var cfgToken = extractCfgToken(html);
       if (!cfgToken) {
-        log("Hata: Sayfadan 'cfg' tokenı alınamadı.");
+        log("Hata: Sayfada oyuncu konfigürasyon tokenı (cfg) bulunamadı.");
         return [];
       }
-      log("Doğrulama Tokenı Başarıyla Kazındı: " + cfgToken);
+      log("Mekanizma Başarılı. Token: " + cfgToken);
 
       var ajaxUrl = domain + "/ajax-player-config";
-      var postData = { "cfg": cfgToken };
-
-      return postJson(ajaxUrl, postData, contentUrl)
+      return postJson(ajaxUrl, { "cfg": cfgToken }, contentUrl)
         .then(function(response) {
           if (response && response.success && response.config && response.config.v) {
             var videoUrl = response.config.v;
-            log("Video Linki Çözüldü: " + videoUrl);
+            log("Akış Bulundu: " + videoUrl);
 
             return [{
-              name: "Dizipal - Player",
-              title: "Dizipal [1080p AD-FREE]",
+              name: "Dizipal - Premium",
+              title: "Dizipal [1080p REKLAMSIZ]",
               url: videoUrl,
               quality: "1080p",
               type: "direct",
