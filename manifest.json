@@ -1,22 +1,26 @@
-[
-  {
-    "id": "dizipal",
-    "name": "Dizipal",
-    "description": "Türkçe dublaj ve altyazılı film ve diziler. Tüm dil seçeneklerini destekler.",
-    "version": "2.0.0",
-    "author": "Nuvio",
-    "supportedTypes": ["movie", "tv"],
-    "filename": "providers/dizipal.js",
-    "enabled": true,
-    "logo": "https://www.google.com/s2/favicons?domain=dizipal2084.com&sz=64",
-    "contentLanguage": ["tr"],
-    "formats": ["mp4", "m3u8"],
-    "limited": false,
-    "disabledPlatforms": [],
-    "supportsExternalPlayer": true,
-    "languages": {
-      "audio": ["tr", "en"],
-      "subtitles": ["tr", "en"]
+{
+  "name": "DarthVader Türkçe Nuvio Deposu",
+  "version": "1.0.0",
+  "scrapers": [
+    {
+      "id": "dizipal",
+      "name": "Dizipal",
+      "description": "Türkçe dublaj ve altyazılı film ve diziler. Tüm dil seçeneklerini destekler.",
+      "version": "2.0.0",
+      "author": "Halil",
+      "supportedTypes": ["movie", "tv"],
+      "filename": "providers/dizipal.js",
+      "enabled": true,
+      "logo": "https://www.google.com/s2/favicons?domain=dizipal2084.com&sz=64",
+      "contentLanguage": ["tr"],
+      "formats": ["mp4", "m3u8"],
+      "limited": false,
+      "disabledPlatforms": [],
+      "supportsExternalPlayer": true,
+      "languages": {
+        "audio": ["tr", "en"],
+        "subtitles": ["tr", "en"]
+      }
     }
-  }
-]
+  ]
+}
