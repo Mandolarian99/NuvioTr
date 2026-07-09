@@ -1,5 +1,5 @@
 /**
-* Dizipal Provider for Nuvio - Engine Sürümü: 1.8.0
+* Dizipal Provider for Nuvio - Engine Sürümü: 1.0.0
 * Log Analizli Canlı Arama Motoru Entegrasyonu ve Derin Altyazı/Dil Çözücü.
 */
 
