@@ -1,49 +1,35 @@
 /**
- * Dizipal Provider for Nuvio (Production Edition)
- * Yakalanan ağ akışlarına göre tamamen sıfırdan revize edilmiştir.
- * Versiyon: 2.1.0
+ * Dizipal Provider for Nuvio (Production Edition - Hotfix 2)
+ * TMDB İngilizce bölüm adı uyumsuzluğu ve link yakalama hatası giderildi.
+ * Versiyon: 2.1.5
  */
 
 "use strict";
 
-// ─── Sabitler ve Dinamik Domain Algoritması ─────────────────────────────────────
-
 var PRIMARY_DOMAIN = "https://dizipal2085.com";
 var FALLBACK_DOMAINS = [
   "https://dizipal2086.com",
-  "https://dizipal2087.com",
-  "https://dizipal.site"
+  "https://dizipal2087.com"
 ];
 
 var TMDB_KEY = "500330721680edb6d5f7f12ba7cd9023";
-var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36";
-
-var HEADERS = {
-  "User-Agent": UA,
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "tr-TR,tr;q=0.9,en;q=0.8"
-};
+var UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
 var _activeDomain = null;
 
-// ─── Yardımcı Fonksiyonlar (QuickJS Uyumlu) ────────────────────────────────────
-
 function log(msg) {
-  console.log("[Dizipal] " + msg);
+  console.log("[Dizipal-Nuvio] " + msg);
 }
 
-// URLSearchParams nesnesi QuickJS'te olmadığı için vanilla string builder kullanıyoruz
 function buildQueryString(obj) {
   return Object.keys(obj).map(function(k) {
     return encodeURIComponent(k) + '=' + encodeURIComponent(obj[k]);
   }).join('&');
 }
 
-// Sitenin canlı olan en güncel domainini bulan koruma fonksiyonu
 function getActiveDomain() {
   if (_activeDomain) return Promise.resolve(_activeDomain);
-
-  return fetch(PRIMARY_DOMAIN + "/", { headers: HEADERS })
+  return fetch(PRIMARY_DOMAIN + "/", { headers: { "User-Agent": UA } })
     .then(function(r) {
       if (r.ok) { _activeDomain = PRIMARY_DOMAIN; return PRIMARY_DOMAIN; }
       return _tryFallbacks();
@@ -57,15 +43,12 @@ function _tryFallbacks() {
     if (!FALLBACK_DOMAINS.length) return resolve(PRIMARY_DOMAIN);
 
     FALLBACK_DOMAINS.forEach(function(d) {
-      fetch(d + "/", { headers: HEADERS })
+      fetch(d + "/", { headers: { "User-Agent": UA } })
         .then(function(r) {
           done++;
           if (settled) return;
-          if (r.ok) {
-            settled = true; _activeDomain = d; resolve(d);
-          } else if (done >= FALLBACK_DOMAINS.length && !settled) {
-            resolve(PRIMARY_DOMAIN);
-          }
+          if (r.ok) { settled = true; _activeDomain = d; resolve(d); }
+          else if (done >= FALLBACK_DOMAINS.length && !settled) { resolve(PRIMARY_DOMAIN); }
         })
         .catch(function() {
           done++;
@@ -76,29 +59,39 @@ function _tryFallbacks() {
 }
 
 function getHtml(url, referer) {
-  var hdrs = Object.assign({}, HEADERS, { "Referer": referer || PRIMARY_DOMAIN + "/" });
-  return fetch(url, { headers: hdrs }).then(function(r) {
-    if (!r.ok) throw new Error("HTTP " + r.status + " - " + url);
+  return fetch(url, { 
+    method: "GET",
+    headers: {
+      "User-Agent": UA,
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "Accept-Language": "tr-TR,tr;q=0.9",
+      "Referer": referer || (PRIMARY_DOMAIN + "/"),
+      "Origin": referer ? referer.substring(0, referer.lastIndexOf('/')) : PRIMARY_DOMAIN
+    }
+  }).then(function(r) {
+    if (!r.ok) throw new Error("HTTP " + r.status);
     return r.text();
   });
 }
 
 function postJson(url, data, referer) {
+  var bodyString = buildQueryString(data);
   return fetch(url, {
     method: "POST",
-    headers: Object.assign({}, HEADERS, {
-      "Content-Type": "application/x-www-form-urlencoded",
-      "Referer": referer || PRIMARY_DOMAIN + "/",
-      "X-Requested-With": "XMLHttpRequest"
-    }),
-    body: buildQueryString(data)
+    headers: {
+      "User-Agent": UA,
+      "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+      "Accept": "application/json, text/javascript, */*; q=0.01",
+      "X-Requested-With": "XMLHttpRequest",
+      "Referer": referer || (PRIMARY_DOMAIN + "/"),
+      "Origin": referer ? referer.substring(0, referer.lastIndexOf('/')) : PRIMARY_DOMAIN
+    },
+    body: bodyString
   }).then(function(r) {
-    if (!r.ok) throw new Error("HTTP " + r.status + " - " + url);
+    if (!r.ok) throw new Error("HTTP POST " + r.status);
     return r.json();
   });
 }
-
-// ─── Regex Veri Kazıyıcılar (Scrapers) ─────────────────────────────────────────
 
 function extractSlug(html, mediaType) {
   var prefix = mediaType === "movie" ? "/film/" : "/dizi/";
@@ -107,20 +100,39 @@ function extractSlug(html, mediaType) {
   return m ? m[1] : null;
 }
 
+// Görseldeki hatayı çözen akıllı bölüm yakalayıcı regex seti
 function extractEpisodeUrl(html, domain, season, episode) {
+  var s = parseInt(season, 10);
+  var e = parseInt(episode, 10);
+
   var patterns = [
-    new RegExp('href=["\']([^"\']*' + season + '-sezon-' + episode + '-bolum[^"\']*)["\']', 'i'),
-    new RegExp('href=["\']([^"\']*season-' + season + '-episode-' + episode + '[^"\']*)["\']', 'i'),
-    new RegExp('href=["\']([^"\']*/bolum/[^"\'/]+-' + season + '-sezon-' + episode + '-bolum[^"\']*)["\']', 'i')
+    new RegExp('href=["\']([^"\']+' + s + '-sezon-' + e + '-bolum[^"\']*)["\']', 'i'),
+    new RegExp('href=["\']([^"\']+' + s + 'x' + (e < 10 ? '0' + e : e) + '[^"\']*)["\']', 'i'),
+    new RegExp('href=["\']([^"\']+' + s + 'x' + e + '[^"\']*)["\']', 'i'),
+    new RegExp('href=["\']([^"\']*season-' + s + '-episode-' + e + '[^"\']*)["\']', 'i'),
+    new RegExp('href=["\']([^"\']*/bolum/[^"\'/]+-' + s + '-sezon-' + e + '-bolum[^"\']*)["\']', 'i')
   ];
+
   for (var i = 0; i < patterns.length; i++) {
     var m = html.match(patterns[i]);
-    if (m) return m[1].charAt(0) === '/' ? domain + m[1] : m[1];
+    if (m) {
+      var matchedUrl = m[1];
+      return matchedUrl.charAt(0) === '/' ? domain + matchedUrl : matchedUrl;
+    }
+  }
+  
+  // Son çare: Tüm linkleri tara ve sayısal eşleşme ara
+  var hrefRegex = /href=["']([^"']+)["']/g;
+  var match;
+  while ((match = hrefRegex.exec(html)) !== null) {
+    var link = match[1];
+    if (link.includes(s + '-sezon') && link.includes(e + '-bolum')) {
+      return link.charAt(0) === '/' ? domain + link : link;
+    }
   }
   return null;
 }
 
-// Yeni Eklenen: Sayfadaki gizli cfg player token'ını çıkaran kritik fonksiyon
 function extractCfgToken(html) {
   var patterns = [
     /cfg\s*=\s*["']([^"']+)["']/i,
@@ -135,26 +147,6 @@ function extractCfgToken(html) {
   return null;
 }
 
-function extractVideoUrl(html, domain) {
-  var patterns = [
-    /["'](https?:\/\/[^"']+\.(?:mp4|m3u8)[^"']*)["']/i,
-    /file\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i,
-    /src\s*:\s*["']([^"']+\.(?:mp4|m3u8)[^"']*)["']/i,
-    /(https?:\/\/[^\s"'<>]+\.(?:mp4|m3u8)[^\s"'<>]*)/i
-  ];
-  for (var i = 0; i < patterns.length; i++) {
-    var m = html.match(patterns[i]);
-    if (m) {
-      var url = m[1] || m[0];
-      if (url && url.indexOf('http') !== 0) {
-        url = domain + (url.charAt(0) === '/' ? '' : '/') + url;
-      }
-      return url;
-    }
-  }
-  return null;
-}
-
 function getTmdbInfo(tmdbId, mediaType) {
   var ep = mediaType === "movie" ? "movie" : "tv";
   return fetch("https://api.themoviedb.org/3/" + ep + "/" + tmdbId + "?api_key=" + TMDB_KEY + "&language=tr-TR")
@@ -164,21 +156,22 @@ function getTmdbInfo(tmdbId, mediaType) {
         title:     (d.name || d.title || "").trim(),
         origTitle: (d.original_name || d.original_title || "").trim()
       };
-    });
+    }).catch(function() { return { title: "", origTitle: "" }; });
 }
 
-// ─── Ana Akış Motoru ───────────────────────────────────────────────────────────
-
 function getStreams(tmdbId, mediaType, season, episode) {
-  log("Nuvio İstek Başlattı. Kimlik: " + tmdbId + " | Tip: " + mediaType);
+  log("Süreç başladı. ID: " + tmdbId + " Sezon: " + season + " Bölüm: " + episode);
 
   return Promise.all([getTmdbInfo(tmdbId, mediaType), getActiveDomain()])
     .then(function(initData) {
       var info = initData[0];
       var domain = initData[1];
-      log("Canlı Sunucu: " + domain + " üzerinden '" + info.title + "' aranıyor.");
-
+      
+      // Sitede aratılacak adı belirle (Örn: House of the Dragon)
       var searchQuery = info.title || info.origTitle;
+      if (!searchQuery) throw new Error("Başlık bilgisi alınamadı.");
+
+      log("Aranan İçerik: " + searchQuery);
       var searchUrl = domain + "/ara?q=" + encodeURIComponent(searchQuery);
 
       return getHtml(searchUrl, domain).then(function(searchHtml) {
@@ -191,15 +184,17 @@ function getStreams(tmdbId, mediaType, season, episode) {
         }
 
         var contentUrl = mediaType === "movie" ? domain + "/film/" + slug : domain + "/dizi/" + slug;
+        log("Dizi Ana Sayfası: " + contentUrl);
+
         return getHtml(contentUrl, domain).then(function(contentHtml) {
           if (mediaType === "tv") {
+            // Sezon ve bölüm linkini akıllıca yakala
             var epUrl = extractEpisodeUrl(contentHtml, domain, season, episode);
-            if (epUrl) {
-              log("Bölüm Sayfası Bulundu: " + epUrl);
-              return getHtml(epUrl, contentUrl).then(function(epHtml) {
-                return { html: epHtml, contentUrl: epUrl, domain: domain };
-              });
-            }
+            if (!epUrl) throw new Error("İlgili Sezon/Bölüm bağlantısı dizi sayfasında bulunamadı.");
+            log("Bölüm Sayfası Bağlantısı: " + epUrl);
+            return getHtml(epUrl, contentUrl).then(function(epHtml) {
+              return { html: epHtml, contentUrl: epUrl, domain: domain };
+            });
           }
           return { html: contentHtml, contentUrl: contentUrl, domain: domain };
         });
@@ -210,73 +205,46 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var contentUrl = result.contentUrl;
       var domain = result.domain;
 
-      // Ağ akışında yakalanan yeni mimari: cfg token'ını sayfadan çekiyoruz
       var cfgToken = extractCfgToken(html);
-      log("Yakalanan CFG Hash: " + (cfgToken ? cfgToken : "Bulunamadı"));
-
       if (!cfgToken) {
-        // Fallback: Eğer token yoksa düz video url araması yap
-        var directUrl = extractVideoUrl(html, domain);
-        if (directUrl) {
-          return [{
-            name: "Dizipal",
-            title: "Dizipal - Doğrudan",
-            url: directUrl,
-            quality: "1080p",
-            type: directUrl.indexOf(".m3u8") !== -1 ? "hls" : "direct",
-            headers: { "Referer": contentUrl, "User-Agent": UA }
-          }];
-        }
-        log("Hata: Sayfada ne oyuncu konfigürasyonu ne de doğrudan video linki tespit edilebildi.");
+        log("Hata: Sayfadan 'cfg' tokenı alınamadı.");
         return [];
       }
+      log("Doğrulama Tokenı Başarıyla Kazındı: " + cfgToken);
 
-      // Ağ akışında doğruladığımız yeni endpoint istek verisi oluşturuluyor
       var ajaxUrl = domain + "/ajax-player-config";
       var postData = { "cfg": cfgToken };
 
-      log("Oyuncu Config İsteği Atılıyor... Endpoint: " + ajaxUrl);
       return postJson(ajaxUrl, postData, contentUrl)
         .then(function(response) {
           if (response && response.success && response.config && response.config.v) {
             var videoUrl = response.config.v;
-            log("Başarılı! Gizli Video Linki Çözüldü: " + videoUrl);
+            log("Video Linki Çözüldü: " + videoUrl);
 
-            var stream = {
-              name: "Dizipal",
-              title: "Dizipal - Otomatik Kaynak",
+            return [{
+              name: "Dizipal - Player",
+              title: "Dizipal [1080p AD-FREE]",
               url: videoUrl,
               quality: "1080p",
-              type: (videoUrl.indexOf(".m3u8") !== -1 || videoUrl.indexOf("/hls/") !== -1) ? "hls" : "direct",
+              type: "direct",
               headers: { 
                 "Referer": contentUrl, 
-                "User-Agent": UA
-              },
-              audio: "tr",
-              subtitles: []
-            };
-
-            // Eğer gelen embed linki m3u8 değil de üçüncü taraf iframe ise tipini Nuvio standartlarına uyarla
-            if (videoUrl.includes("embed-") || videoUrl.includes("/embed/")) {
-              stream.type = "direct"; // Nuvio dış oynatıcı iframe köprüsü
-            }
-
-            return [stream];
+                "User-Agent": UA,
+                "Origin": domain
+              }
+            }];
           }
           return [];
         })
-        .catch(function(err) {
-          log("POST /ajax-player-config Hatası: " + err.message);
+        .catch(function() {
           return [];
         });
     })
     .catch(function(err) {
-      log("Akış Döngüsü Hatası: " + err.message);
+      log("Akış Hatası: " + err.message);
       return [];
     });
 }
-
-// ─── Export Yapısı (Nuvio Core Enjeksiyonu) ────────────────────────────────────
 
 if (typeof module !== 'undefined' && module.exports) {
   module.exports = { getStreams: getStreams };
