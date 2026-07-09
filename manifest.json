@@ -1,11 +1,11 @@
 {
   "name": "DarthVader Türkçe Nuvio Deposu",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "scrapers": [
     {
       "id": "dizipal",
       "name": "Dizipal",
-      "description": "Türkçe dublaj ve altyazılı film ve diziler. Tüm dil seçeneklerini destekler.",
+      "description": "Türkçe dublaj ve altyazılı film/diziler için gelişmiş akıllı eşleştirme motoru (2085 Güncel Sürüm).",
       "version": "2.1.5",
       "author": "DarthVader",
       "supportedTypes": ["movie", "tv"],
