@@ -1,6 +1,6 @@
 /**
- * Dizipal Provider for Nuvio - Engine 3.6.0
- * Tüm altyazılar, dil seçenekleri ve arama filtreleri entegre edildi.
+ * Dizipal Provider for Nuvio - Engine Sürümü: 1.8.0
+ * Log Analizli Canlı Arama Motoru Entegrasyonu ve Derin Altyazı/Dil Çözücü.
  */
 
 "use strict";
@@ -8,8 +8,7 @@
 var PRIMARY_DOMAIN = "https://dizipal2085.com";
 var FALLBACK_DOMAINS = [
   "https://dizipal2086.com",
-  "https://dizipal2087.com",
-  "https://dizipal2084.com"
+  "https://dizipal2087.com"
 ];
 
 var TMDB_KEY = "500330721680edb6d5f7f12ba7cd9023";
@@ -67,7 +66,26 @@ function cleanSlug(text) {
     .replace(/^-+|-+$/g, '');
 }
 
-// ─── ALTYAZI VE DİL AYRIŞTIRMA KATMANI ────────────────────────────────────────
+// LOG DOĞRULAMASI: Sitenin gerçek arka plan arama motoru
+function searchInSite(domain, query) {
+  var url = domain + "/ajax-search?q=" + encodeURIComponent(query);
+  return fetch(url, {
+    method: "GET",
+    headers: {
+      "User-Agent": UA,
+      "Referer": domain + "/",
+      "X-Requested-With": "XMLHttpRequest",
+      "Accept": "application/json, text/javascript, */*; q=0.01"
+    }
+  })
+  .then(function(r) { 
+    if (!r.ok) throw new Error("Arama isteği başarısız");
+    return r.json(); 
+  })
+  .catch(function() { return null; });
+}
+
+// LOG DOĞRULAMASI: Embed player'ların (cortinae/imagestoo) içindeki m3u8 ve altyazıları ayıklar
 function parseEmbedPlayer(embedUrl, domainReferer) {
   return fetch(embedUrl, {
     headers: { "User-Agent": UA, "Referer": domainReferer }
@@ -77,13 +95,13 @@ function parseEmbedPlayer(embedUrl, domainReferer) {
     var streams = [];
     var subtitles = [];
 
-    // 1. Altyazıları regex ile yakala (tracks: [{file: "...", label: "Turkish"}] şeması)
+    // Altyazı taraması (tracks bloğu)
     var tracksMatch = html.match(/tracks\s*:\s*(\[[^\]]+\])/);
     if (tracksMatch) {
       try {
         var parsedTracks = JSON.parse(tracksMatch[1].replace(/'/g, '"'));
         parsedTracks.forEach(function(track) {
-          if (track.file && (track.kind === 'captions' || track.kind === 'subtitles' || track.label)) {
+          if (track.file) {
             subtitles.push({
               url: track.file.startsWith('//') ? 'https:' + track.file : track.file,
               lang: track.label || 'Türkçe',
@@ -92,7 +110,6 @@ function parseEmbedPlayer(embedUrl, domainReferer) {
           }
         });
       } catch(e) {
-        // Ham regex fallbacks (JSON parse fail olursa)
         var regSub = /file\s*:\s*["']([^"']+\.(vtt|srt))["']\s*,\s*label\s*:\s*["']([^"']+)["']/g;
         var m;
         while ((m = regSub.exec(html)) !== null) {
@@ -101,7 +118,7 @@ function parseEmbedPlayer(embedUrl, domainReferer) {
       }
     }
 
-    // 2. Ham Video Stream URL'ini yakala (.m3u8 veya .mp4)
+    // Video akış dosyası taraması (.m3u8 veya .mp4)
     var fileMatch = html.match(/file\s*:\s*["']([^"']+\.(m3u8|mp4))["']/i) || 
                     html.match(/source\s*:\s*["']([^"']+\.(m3u8|mp4))["']/i);
     
@@ -116,9 +133,9 @@ function parseEmbedPlayer(embedUrl, domainReferer) {
   .catch(function() { return []; });
 }
 
-// ─── ANA NUVIO ENTEGRASYONU ──────────────────────────────────────────────────
+// ─── ANA MOTOR TETİKLEYİCİSİ ─────────────────────────────────────────────────
 function getStreams(tmdbId, mediaType, season, episode) {
-  log("Nuvio Stream Engine tetiklendi. ID: " + tmdbId);
+  log("İçerik arama süreci başlatıldı. TMDB ID: " + tmdbId);
 
   return Promise.all([
     fetch("https://api.themoviedb.org/3/" + (mediaType === "movie" ? "movie" : "tv") + "/" + tmdbId + "?api_key=" + TMDB_KEY + "&language=tr-TR").then(function(r){ return r.json(); }),
@@ -127,52 +144,83 @@ function getStreams(tmdbId, mediaType, season, episode) {
   .then(function(results) {
     var tmdbData = results[0];
     var domain = results[1];
-    var title = tmdbData.name || tmdbData.title || "";
     
-    // Slug eşleşmesinde hata payını sıfırlamak için doğrudan arama tetikleme simülasyonu
-    var url = "";
-    var cleanTitle = cleanSlug(title);
+    var primaryTitle = tmdbData.name || tmdbData.title || "";
+    var originalTitle = tmdbData.original_name || tmdbData.original_title || "";
+
+    log("Arama kelimesi gönderiliyor: " + primaryTitle);
     
-    if (mediaType === "movie") {
-      url = domain + "/film/" + cleanTitle;
-    } else {
-      url = domain + "/bolum/" + cleanTitle + "-" + parseInt(season, 10) + "-sezon-" + parseInt(episode, 10) + "-bolum";
+    // Önce sitenin canlı arama motorunda aratıyoruz
+    return searchInSite(domain, primaryTitle).then(function(searchResponse) {
+      var slug = null;
+
+      if (searchResponse && searchResponse.success && searchResponse.results && searchResponse.results.length > 0) {
+        var matchedUrl = searchResponse.results[0].url; 
+        slug = matchedUrl.substring(matchedUrl.lastIndexOf('/') + 1);
+        log("Sitenin arama motorundan eşleşen slug alındı: " + slug);
+      }
+
+      // Eğer arama motoru bulamazsa, orijinal İngilizce adıyla bir kez daha aramayı dene
+      if (!slug && originalTitle && originalTitle !== primaryTitle) {
+        log("İkinci ar deneniyor (Orijinal Ad): " + originalTitle);
+        return searchInSite(domain, originalTitle).then(function(bResponse) {
+          if (bResponse && bResponse.success && bResponse.results && bResponse.results.length > 0) {
+            var bUrl = bResponse.results[0].url;
+            slug = bUrl.substring(bUrl.lastIndexOf('/') + 1);
+          }
+          return { slug: slug, domain: domain, title: primaryTitle };
+        });
+      }
+
+      return { slug: slug, domain: domain, title: primaryTitle };
+    });
+  })
+  .then(function(searchResult) {
+    var slug = searchResult.slug;
+    var domain = searchResult.domain;
+    var title = searchResult.title;
+
+    // Eğer arama motoru iki denemede de hiçbir şey bulamazsa, son çare akıllı tahmine düş
+    if (!slug) {
+      slug = cleanSlug(title);
+      log("Arama motoru yanıt vermedi, tahmini slug deneniyor: " + slug);
     }
 
-    log("Hedef içerik taranıyor: " + url);
-    return fetch(url, { headers: { "User-Agent": UA, "Referer": domain + "/" } })
+    var targetPageUrl = "";
+    if (mediaType === "movie") {
+      targetPageUrl = domain + "/film/" + slug;
+    } else {
+      // LOG VERİSİ: Bölüm sayfaları doğrudan bu şemayla çalışıyor
+      targetPageUrl = domain + "/bolum/" + slug + "-" + parseInt(season, 10) + "-sezon-" + parseInt(episode, 10) + "-bolum";
+    }
+
+    log("İçerik sayfasına gidiliyor: " + targetPageUrl);
+    return fetch(targetPageUrl, { headers: { "User-Agent": UA, "Referer": domain + "/" } })
       .then(function(r) { 
-        if(!r.ok) throw new Error("İçerik bulunamadı"); 
+        if(!r.ok) throw new Error("Sayfa yüklenemedi, akış yok."); 
         return r.text(); 
       })
       .then(function(html) {
-        // Sayfadaki dil alternatiflerini ve cfg tokenlarını topla
-        var foundSources = [];
-        
-        // CSRF Token ve Cfg yakalayıcılar
         var csrfTokenMatch = html.match(/csrf_token\s*=\s*["']([^"']+)["']/i);
         var csrfToken = csrfTokenMatch ? csrfTokenMatch[1] : null;
 
-        // Sayfa kaynağında birden fazla alternatif video alternatifi (Dublaj / Altyazılı sekmeleri) bulunabilir
+        // Sayfa kaynağındaki tüm oyuncu konfigürasyonlarını (Dublaj/Altyazı sekmelerini) topla
         var cfgRegex = /data-cfg\s*=\s*["']([^"']+)["']/g;
-        var labelRegex = /data-label\s*=\s*["']([^"']+)["']/g; // Sekme isimleri: Dublaj, Altyazı
-        
         var cfgs = [];
         var match;
         while ((match = cfgRegex.exec(html)) !== null) { cfgs.push(match[1]); }
         
-        // Eğer data-cfg bulunamadıysa standart tekli cfg'yi ara
         if (cfgs.length === 0) {
           var singleCfg = html.match(/cfg\s*=\s*["']([^"']+)["']/i);
           if (singleCfg) cfgs.push(singleCfg[1]);
         }
 
         if (cfgs.length === 0) {
-          log("Hata: Sayfada oynatıcı tokenı (cfg) saptanamadı.");
+          log("Hata: Sayfada geçerli video konfigürasyonu bulunamadı.");
           return [];
         }
 
-        // Tüm cfg'ler (Alternatif dil / oynatıcı seçenekleri) için paralel istek gönder
+        // Bulunan her dil/alternatif seçeneği için paralel istekleri başlat
         var promises = cfgs.map(function(cfgValue, index) {
           var postData = { "cfg": cfgValue };
           if (csrfToken) postData["csrf_token"] = csrfToken;
@@ -183,7 +231,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
               "User-Agent": UA,
               "Content-Type": "application/x-www-form-urlencoded",
               "X-Requested-With": "XMLHttpRequest",
-              "Referer": url
+              "Referer": targetPageUrl
             },
             body: buildQueryString(postData)
           })
@@ -191,16 +239,18 @@ function getStreams(tmdbId, mediaType, season, episode) {
           .then(function(resJson) {
             if (resJson && resJson.success && resJson.config && resJson.config.v) {
               var embedUrl = resJson.config.v;
+              
+              // Varsayılan etiket tanımla
               var sourceLabel = (index === 0) ? "Türkçe Altyazı / Orijinal" : "Alternatif Seçenek " + (index + 1);
               
-              // HTML içinde sekme etiketini saptamaya çalış
+              // Sayfa kaynağından ilgili cfg'nin dil etiketini kazı (Örn: Türkçe Dublaj)
               if (html.includes(cfgValue)) {
-                var segment = html.split(cfgValue)[0];
-                var labelMatch = segment.match(/data-label\s*=\s*["']([^"']+)["']/i);
+                var partition = html.split(cfgValue)[0];
+                var labelMatch = partition.match(/data-label\s*=\s*["']([^"']+)["']/i);
                 if (labelMatch) sourceLabel = labelMatch[1];
               }
 
-              // Embed içerisindeki ham stream ve altyazı bilgilerini çöz
+              // Embed (Oynatıcı) içine sızıp asıl m3u8 akışını ve dil/altyazı listesini çek
               return parseEmbedPlayer(embedUrl, domain).then(function(mediaStreams) {
                 if (mediaStreams.length > 0) {
                   return {
@@ -209,7 +259,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
                     url: mediaStreams[0].fileUrl,
                     quality: "1080p",
                     type: "direct",
-                    subtitles: mediaStreams[0].subtitles,
+                    subtitles: mediaStreams[0].subtitles, // Nuvio altyazı menüsüne gömülür
                     headers: {
                       "Referer": embedUrl,
                       "User-Agent": UA,
@@ -231,7 +281,7 @@ function getStreams(tmdbId, mediaType, season, episode) {
       });
   })
   .catch(function(err) {
-    log("İşlem Hatası: " + err.message);
+    log("Akış Hatası: " + err.message);
     return [];
   });
 }
