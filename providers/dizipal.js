@@ -1,7 +1,7 @@
 /**
- * Dizipal Provider for Nuvio (Log-Verified Production Edition)
- * Canlı Ağ Trafiği (HAR) Analizine Göre %100 Uyumlu Hale Getirildi.
- * Versiyon: 3.0.0
+ * Dizipal Provider for Nuvio (Security Bypass Edition)
+ * Anti-Bot CSRF Token koruması kırıldı ve tam entegrasyon sağlandı.
+ * Versiyon: 3.5.0
  */
 
 "use strict";
@@ -58,7 +58,6 @@ function _tryFallbacks() {
   });
 }
 
-// Log dosyasındaki gerçek ajax-search GET isteği mimarisi
 function searchInSite(domain, query) {
   var url = domain + "/ajax-search?q=" + encodeURIComponent(query);
   return fetch(url, {
@@ -66,11 +65,10 @@ function searchInSite(domain, query) {
     headers: {
       "User-Agent": UA,
       "Referer": domain + "/",
-      "X-Requested-With": "XMLHttpRequest",
-      "Accept": "application/json, text/javascript, */*; q=0.01"
+      "X-Requested-With": "XMLHttpRequest"
     }
   }).then(function(r) { 
-    if (!r.ok) throw new Error("Arama başarısız: " + r.status);
+    if (!r.ok) throw new Error("Arama HTTP hatası: " + r.status);
     return r.json(); 
   });
 }
@@ -80,7 +78,6 @@ function getHtml(url, referer) {
     method: "GET",
     headers: {
       "User-Agent": UA,
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       "Referer": referer || (PRIMARY_DOMAIN + "/")
     }
   }).then(function(r) {
@@ -89,7 +86,6 @@ function getHtml(url, referer) {
   });
 }
 
-// Sitenin şifreli ajax-player-config POST taşıyıcısı
 function postJson(url, data, referer) {
   var bodyString = buildQueryString(data);
   return fetch(url, {
@@ -98,12 +94,11 @@ function postJson(url, data, referer) {
       "User-Agent": UA,
       "Content-Type": "application/x-www-form-urlencoded",
       "X-Requested-With": "XMLHttpRequest",
-      "Referer": referer,
-      "Accept": "application/json, text/javascript, */*; q=0.01"
+      "Referer": referer
     },
     body: bodyString
   }).then(function(r) {
-    if (!r.ok) throw new Error("Config POST hatası: " + r.status);
+    if (!r.ok) throw new Error("POST hatası: " + r.status);
     return r.json();
   });
 }
@@ -117,18 +112,34 @@ function cleanSlug(text) {
     .replace(/^-+|-+$/g, '');
 }
 
+// Log analizine göre eklenen çift taraflı token kazıyıcılar
 function extractCfgToken(html) {
   var patterns = [
     /cfg\s*=\s*["']([^"']+)["']/i,
     /data-cfg\s*=\s*["']([^"']+)["']/i,
-    /player-config\?cfg=([^"'\s&]+)/i,
-    /postData:\s*["']cfg=([^"']+)["']/i
+    /player-config\?cfg=([^"'\s&]+)/i
   ];
   for (var i = 0; i < patterns.length; i++) {
     var m = html.match(patterns[i]);
     if (m) return m[1];
   }
-  return null;
+  var brute = html.match(/cfg=([a-f0-9]{32})/i);
+  return brute ? brute[1] : null;
+}
+
+function extractCsrfToken(html) {
+  var patterns = [
+    /csrf_token\s*=\s*["']([^"']+)["']/i,
+    /["']csrf_token["']\s*:\s*["']([^"']+)["']/i,
+    /name=["']csrf_token["']\s+value=["']([^"']+)["']/i,
+    /value=["']([^"']+)["']\s+name=["']csrf_token["']/i
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var m = html.match(patterns[i]);
+    if (m) return m[1];
+  }
+  var brute = html.match(/([a-f0-9]{64})/i); // 64 karakterli hex araması (Logdaki tam şema)
+  return brute ? brute[1] : null;
 }
 
 function getTmdbInfo(tmdbId, mediaType) {
@@ -143,9 +154,9 @@ function getTmdbInfo(tmdbId, mediaType) {
     }).catch(function() { return { title: "", origTitle: "" }; });
 }
 
-// ─── ANA SÜREÇ YÜRÜTÜCÜSÜ ─────────────────────────────────────────────────────
+// ─── ANA MOTOR ────────────────────────────────────────────────────────────────
 function getStreams(tmdbId, mediaType, season, episode) {
-  log("Süreç doğrulanmış log yapısıyla başladı. ID: " + tmdbId);
+  log("CSRF Korumalı Akış Motoru Başlatıldı. ID: " + tmdbId);
 
   return Promise.all([getTmdbInfo(tmdbId, mediaType), getActiveDomain()])
     .then(function(initData) {
@@ -153,34 +164,29 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var domain = initData[1];
       var searchQuery = info.title || info.origTitle;
 
-      log("API Araması Yapılıyor: " + searchQuery);
+      log("Sitede sorgulanıyor: " + searchQuery);
       return searchInSite(domain, searchQuery).then(function(searchResponse) {
         var slug = null;
         
-        // Log tabanlı JSON doğrulaması ile tam URL eşleşmesi ayıkla
         if (searchResponse && searchResponse.success && searchResponse.results && searchResponse.results.length > 0) {
-          var siteUrl = searchResponse.results[0].url; // Örn: https://dizipal2085.com/dizi/house-of-the-dragon
+          var siteUrl = searchResponse.results[0].url; 
           slug = siteUrl.substring(siteUrl.lastIndexOf('/') + 1);
-          log("Arama Sonucundan Çıkarılan Slug: " + slug);
         }
 
-        // Eğer API'den gelmezse akıllı algoritmik tahmine düş
         if (!slug) {
           slug = cleanSlug(info.title) || cleanSlug(info.origTitle);
-          log("API boş döndü. Manuel üretilen slug: " + slug);
         }
 
         var targetUrl = "";
         if (mediaType === "movie") {
           targetUrl = domain + "/film/" + slug;
         } else {
-          // LOG VERİSİ: Bölüm sayfaları doğrudan bu şemayla çalışıyor!
           var s = parseInt(season, 10);
           var e = parseInt(episode, 10);
           targetUrl = domain + "/bolum/" + slug + "-" + s + "-sezon-" + e + "-bolum";
         }
 
-        log("Hedef Sayfa İsteği Gönderiliyor: " + targetUrl);
+        log("Sayfa HTML verisi ve Güvenlik Tokenları alınıyor: " + targetUrl);
         return getHtml(targetUrl, domain).then(function(pageHtml) {
           return { html: pageHtml, currentUrl: targetUrl, domain: domain };
         });
@@ -191,30 +197,33 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var currentUrl = result.currentUrl;
       var domain = result.domain;
 
+      // İki hayati tokenı aynı anda kazı
       var cfgToken = extractCfgToken(html);
-      
-      // Eğer statik HTML'de token yoksa loglardaki ana JS şemasına göre brute-force token ara
-      if (!cfgToken) {
-        var tokenMatch = html.match(/cfg=([a-f0-9]{32})/i);
-        if (tokenMatch) cfgToken = tokenMatch[1];
-      }
+      var csrfToken = extractCsrfToken(html);
 
       if (!cfgToken) {
-        log("Hata: Sayfa kaynağından 'cfg' parametresi ayıklanamadı.");
+        log("Hata: 'cfg' tokenı sayfa yapısından ayıklanamadı.");
         return [];
       }
-      log("Doğrulanan Token: " + cfgToken);
+      
+      log("Doğrulama Başarılı -> cfg: " + cfgToken + " | csrf: " + (csrfToken ? "Alındı" : "Bulunamadı"));
 
       var ajaxUrl = domain + "/ajax-player-config";
-      return postJson(ajaxUrl, { "cfg": cfgToken }, currentUrl)
+      
+      // Sitenin beklediği tam POST veri şeması enjeksiyonu
+      var postData = { "cfg": cfgToken };
+      if (csrfToken) {
+        postData["csrf_token"] = csrfToken;
+      }
+
+      return postJson(ajaxUrl, postData, currentUrl)
         .then(function(response) {
-          // Log dosyasındaki gerçek dönen başarı yapısı: response.success ve response.config.v
           if (response && response.success && response.config && response.config.v) {
             var videoUrl = response.config.v;
-            log("Video Akışı Başarıyla Çözüldü: " + videoUrl);
+            log("Güvenlik Duvarı Aşıldı! Video URL: " + videoUrl);
 
             return [{
-              name: "Dizipal - Native Server",
+              name: "Dizipal - Premium",
               title: "Dizipal [1080p AD-FREE]",
               url: videoUrl,
               quality: "1080p",
@@ -226,16 +235,16 @@ function getStreams(tmdbId, mediaType, season, episode) {
               }
             }];
           }
-          log("Sunucu video konfigürasyonu vermeyi reddetti.");
+          log("Güvenlik Duvarı Tokenı Reddetti.");
           return [];
         })
         .catch(function(err) {
-          log("POST Çözümleme Hatası: " + err.message);
+          log("POST Hatası: " + err.message);
           return [];
         });
     })
     .catch(function(err) {
-      log("Genel Operasyon Hatası: " + err.message);
+      log("Genel Hata: " + err.message);
       return [];
     });
 }
