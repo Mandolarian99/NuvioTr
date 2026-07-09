@@ -1,12 +1,12 @@
 {
   "name": "DarthVader Türkçe Nuvio Deposu",
-  "version": "1.2.4",
+  "version": "1.0.0",
   "scrapers": [
     {
       "id": "dizipal",
       "name": "Dizipal",
       "description": "Türkçe dublaj ve altyazılı film/diziler",
-      "version": "3.6.0",
+      "version": "1.0.0",
       "author": "DarthVader",
       "supportedTypes": ["movie", "tv"],
       "filename": "providers/dizipal.js",
