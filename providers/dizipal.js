@@ -68,6 +68,187 @@ function cleanSlug(text) {
 
 // LOG DOĞRULAMASI: Sitenin gerçek arka plan arama motoru
 function searchInSite(domain, query) {
+  /* ==========================================================================
+ *
+ * SMART SEARCH ENGINE
+ *
+ * ========================================================================== */
+
+function normalize(text){
+
+    if(!text) return "";
+
+    return text
+        .toLowerCase()
+        .replace(/[ğ]/g,"g")
+        .replace(/[ü]/g,"u")
+        .replace(/[ş]/g,"s")
+        .replace(/[ı]/g,"i")
+        .replace(/[ö]/g,"o")
+        .replace(/[ç]/g,"c")
+        .replace(/[^a-z0-9 ]+/g," ")
+        .replace(/\s+/g," ")
+        .trim();
+
+}
+
+function levenshtein(a,b){
+
+    a=normalize(a);
+    b=normalize(b);
+
+    if(a===b)
+        return 100;
+
+    const matrix=[];
+
+    for(let i=0;i<=b.length;i++){
+
+        matrix[i]=[i];
+
+    }
+
+    for(let j=0;j<=a.length;j++){
+
+        matrix[0][j]=j;
+
+    }
+
+    for(let i=1;i<=b.length;i++){
+
+        for(let j=1;j<=a.length;j++){
+
+            if(b.charAt(i-1)==a.charAt(j-1)){
+
+                matrix[i][j]=matrix[i-1][j-1];
+
+            }else{
+
+                matrix[i][j]=Math.min(
+
+                    matrix[i-1][j-1]+1,
+
+                    matrix[i][j-1]+1,
+
+                    matrix[i-1][j]+1
+
+                );
+
+            }
+
+        }
+
+    }
+
+    const distance=matrix[b.length][a.length];
+
+    return (
+
+        (
+
+            Math.max(a.length,b.length)-distance
+
+        )
+
+        /
+
+        Math.max(a.length,b.length)
+
+    )*100;
+
+}
+
+function tokenScore(a,b){
+
+    const ta=normalize(a).split(" ");
+
+    const tb=normalize(b).split(" ");
+
+    let ok=0;
+
+    ta.forEach(function(x){
+
+        if(tb.includes(x))
+            ok++;
+
+    });
+
+    return (
+
+        ok/
+
+        Math.max(ta.length,tb.length)
+
+    )*100;
+
+}
+
+function calculateScore(query,item){
+
+    let score=0;
+
+    score+=levenshtein(
+
+        query,
+
+        item.title||""
+
+    )*0.65;
+
+    score+=tokenScore(
+
+        query,
+
+        item.title||""
+
+    )*0.35;
+
+    return score;
+
+}
+
+function sortSearchResults(query,results){
+
+    if(!results)
+        return [];
+
+    results.forEach(function(r){
+
+        r.__score=
+
+            calculateScore(
+
+                query,
+
+                r
+
+            );
+
+    });
+
+    results.sort(function(a,b){
+
+        return b.__score-a.__score;
+
+    });
+
+    log(
+
+        "En iyi eşleşme : "
+
+        +(results[0]?
+
+            results[0].title
+
+            :"Yok"
+
+        )
+
+    );
+
+    return results;
+
+}
   var url = domain + "/ajax-search?q=" + encodeURIComponent(query);
   return fetch(url, {
     method: "GET",
@@ -155,7 +336,19 @@ function getStreams(tmdbId, mediaType, season, episode) {
       var slug = null;
 
       if (searchResponse && searchResponse.success && searchResponse.results && searchResponse.results.length > 0) {
-        var matchedUrl = searchResponse.results[0].url; 
+        searchResponse.results=
+
+sortSearchResults(
+
+    primaryTitle,
+
+    searchResponse.results
+
+);
+
+var matchedUrl=
+
+searchResponse.results[0].url; 
         slug = matchedUrl.substring(matchedUrl.lastIndexOf('/') + 1);
         log("Sitenin arama motorundan eşleşen slug alındı: " + slug);
       }
@@ -165,7 +358,19 @@ function getStreams(tmdbId, mediaType, season, episode) {
         log("İkinci ar deneniyor (Orijinal Ad): " + originalTitle);
         return searchInSite(domain, originalTitle).then(function(bResponse) {
           if (bResponse && bResponse.success && bResponse.results && bResponse.results.length > 0) {
-            var bUrl = bResponse.results[0].url;
+            bResponse.results=
+
+sortSearchResults(
+
+    originalTitle,
+
+    bResponse.results
+
+);
+
+var bUrl=
+
+bResponse.results[0].url;
             slug = bUrl.substring(bUrl.lastIndexOf('/') + 1);
           }
           return { slug: slug, domain: domain, title: primaryTitle };
